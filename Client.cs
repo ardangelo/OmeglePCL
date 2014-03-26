@@ -57,9 +57,12 @@ namespace Omegle {
 				instance.setClientId(id);
 				Debug.WriteLine(String.Format("Client ID: {0}", id));
 				instance.handleEvents(jsonResponse.events);
-			} catch {
-				Debug.WriteLine("Error in inital request");
-				throw new HttpRequestException(String.Format("Error making request to {0}", startUrl));
+			} catch (HttpRequestException) {
+				Debug.WriteLine(String.Format("Error making request to {0}", startUrl));
+				throw;
+			} catch (JsonException) {
+				Debug.WriteLine("Error communicating with Omegle");
+				throw;
 			}
 
 			while (true) {
@@ -93,6 +96,8 @@ namespace Omegle {
 		
 		public Queue<Event> eventQueue; //in implementation, waitOne unhandledEvent and then process states from queue
 		public AutoResetEvent eventInQueueSignal;
+
+		public EventHandlerThread eventThread;
 		#endregion
 
 		//constructor with values that seem to be constant from sniffed official requests
@@ -244,8 +249,10 @@ namespace Omegle {
 				Task<HttpResponseMessage> resultTask = browser.PostAsync(
 					String.Format(this.baseUrl, this.server) + requestUrl, content);
 				result = await resultTask;
-			} catch {
-				throw new HttpRequestException(requestUrl);
+			} catch (Exception ex) {
+				if (ex is HttpRequestException) {
+					throw new HttpRequestException(requestUrl);
+				} else throw ex;
 			}
 			Debug.WriteLine("Response: {0}", result.Content.ReadAsStringAsync().Result);
 				
@@ -291,21 +298,19 @@ namespace Omegle {
 		}
 
 		public async void typing() {
-			//JObject content = new JObject(new JProperty("id", this.clientId));
 			Dictionary<string, string> content = new Dictionary<string, string> { { "id", this.clientId } };
 
 			await makeRequest(this.requestUrls["typing"], content);
 		}
 
 		public async void stoppedTyping() {
-			//JObject content = new JObject(new JProperty("id", this.clientId));
 			Dictionary<string, string> content = new Dictionary<string, string> { { "id", this.clientId } };
 
 			await makeRequest(this.requestUrls["stoppedTyping"], content);
 		}
 
 		public async void send(string message) {
-			Dictionary<string, string> content = new Dictionary<string, string> { { "id", this.clientId } };
+			Dictionary<string, string> content = new Dictionary<string, string> { { "msg", message }, { "id", this.clientId } };
 
 			await makeRequest(this.requestUrls["send"], content);
 		}
@@ -324,9 +329,13 @@ namespace Omegle {
 			}
 
 			EventHandlerThread thread = new EventHandlerThread(this, url);
-			Task.Factory.StartNew(() => {
+			var runTask = Task.Factory.StartNew(() => {
 				thread.Run();
 			});
+
+			runTask.Wait();
+
+			this.eventThread = thread;
 
 			return thread;
 		}
