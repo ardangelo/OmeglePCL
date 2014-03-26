@@ -306,7 +306,7 @@ namespace Omegle {
 		public async void stoppedTyping() {
 			Dictionary<string, string> content = new Dictionary<string, string> { { "id", this.clientId } };
 
-			await makeRequest(this.requestUrls["stoppedTyping"], content);
+			await makeRequest(this.requestUrls["stoppedtyping"], content);
 		}
 
 		public async void send(string message) {
