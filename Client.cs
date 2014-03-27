@@ -13,7 +13,7 @@ namespace Omegle {
 
 	public enum EventType {
 		Waiting, Connected, RecaptchaRequired, RecaptchaRejected, CommonLikes, Typing, 
-		StoppedTyping, GotMessage, StrangerDisconnected, StatusInfo, IdentDigests, Unhandled
+		StoppedTyping, GotMessage, StrangerDisconnected, StatusInfo, IdentDigests, Error, Unhandled
 	};
 
 	public class Event {
@@ -26,7 +26,15 @@ namespace Omegle {
 		}
 	}
 
-	public class EventHandlerThread {
+	public class ErrorEvent : Event { //because client doesn't catch the exception for some reason
+		public Exception exception;
+
+		public ErrorEvent(Exception exception) : base(EventType.Error, new List<String>()) {
+			this.exception = exception;
+		}
+	}
+
+	internal class EventHandlerThread {
 		private Client instance;
 		private string startUrl;
 		private ManualResetEvent disconnectEvent;
@@ -97,7 +105,7 @@ namespace Omegle {
 		public Queue<Event> eventQueue; //in implementation, waitOne unhandledEvent and then process states from queue
 		public AutoResetEvent eventInQueueSignal;
 
-		public EventHandlerThread eventThread;
+		private EventHandlerThread eventThread;
 		#endregion
 
 		//constructor with values that seem to be constant from sniffed official requests
@@ -170,13 +178,13 @@ namespace Omegle {
 
 		#region accessors and mutators as required by protection
 		public Boolean isConnected() { return connected; }
-		public void setClientId(string newId) { this.clientId = newId; }
-		public int getEventDelay() { return this.eventDelay; }
-		public HttpClient getBrowser() { return this.browser;  }
+		internal void setClientId(string newId) { this.clientId = newId; }
+		internal int getEventDelay() { return this.eventDelay; }
+		internal HttpClient getBrowser() { return this.browser; }
 		#endregion
 
 		#region utilities
-		public static string generateId() {
+		internal static string generateId() {
 			string randId = "";
 			string selection = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 			Random rnd = new Random();
@@ -189,7 +197,7 @@ namespace Omegle {
 			return randId;
 		}
 
-		public static string urlEncode(Dictionary<string,string> content) {
+		internal static string urlEncode(Dictionary<string, string> content) {
 			Boolean isFirst = true;
 			string construct = "";
 			foreach (KeyValuePair<string, string> prop in content) {
@@ -202,7 +210,7 @@ namespace Omegle {
 		#endregion
 
 		#region server -> client tasks
-		public void handleEvents(JArray jsonResponse) {
+		internal void handleEvents(JArray jsonResponse) {
 
 			JArray container;
 			if (jsonResponse.Count > 1) {
@@ -235,7 +243,7 @@ namespace Omegle {
 		#endregion
 
 		#region client -> server tasks
-		public async Task<string> makeRequest(string requestUrl, Dictionary<string, string> passedContent) {
+		internal async Task<string> makeRequest(string requestUrl, Dictionary<string, string> passedContent) {
 			HttpResponseMessage result;
 
 			Debug.WriteLine("Attempting request to {0}", String.Format(this.baseUrl, this.server) + requestUrl);
@@ -253,16 +261,19 @@ namespace Omegle {
 				if (ex is HttpRequestException) {
 					throw new HttpRequestException(requestUrl);
 				} else throw ex;
+				//lock (this.eventQueue) {
+				//	this.eventQueue.Enqueue(new ErrorEvent(ex));
+				//}
 			}
 			Debug.WriteLine("Response: {0}", result.Content.ReadAsStringAsync().Result);
 				
 			return result.Content.ReadAsStringAsync().Result;
 		}
-		public async Task<string> makeRequest(string requestUrl) {
+		internal async Task<string> makeRequest(string requestUrl) {
 			return await makeRequest(requestUrl, new Dictionary<string, string>());
 		}
 
-		public async void requestEvents() {
+		internal async void requestEvents() {
 			//JObject content = new JObject(new JProperty("id", this.clientId));
 			Dictionary<string, string> content = new Dictionary<string,string>{{"id", this.clientId}};
 			
@@ -320,8 +331,8 @@ namespace Omegle {
 				new Random().ToString(), this.randomId))); //nocache() has been experimentallty replaced with new Random()
 		}
 
-		public EventHandlerThread Start() {
-			string url = String.Format(this.baseUrl, this.server) + 
+		public void Start() { //was of type EventHandlerThread, but that's not necessary anymore with the 
+			string url = String.Format(this.baseUrl, this.server) + //eventThread field
 				String.Format(this.requestUrls["start"], this.rcs, this.firstevents, this.spid, this.randomId, this.lang);
 			if (this.topics.Count > 0) {
 				JObject json = new JObject(new JProperty("topics", new JArray(from c in this.topics.ToArray<String>() select new JValue(c))));
@@ -333,11 +344,19 @@ namespace Omegle {
 				thread.Run();
 			});
 
-			runTask.Wait();
+			try {
+				runTask.Wait();
+			} catch (AggregateException ex) {
+				throw ex;
+			}
 
 			this.eventThread = thread;
 
-			return thread;
+			//return thread;
+		}
+
+		public void Stop() {
+			this.eventThread.Stop();
 		}
 		#endregion
 	}
