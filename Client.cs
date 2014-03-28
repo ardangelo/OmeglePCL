@@ -65,16 +65,29 @@ namespace Omegle {
 				instance.setClientId(id);
 				Debug.WriteLine(String.Format("Client ID: {0}", id));
 				instance.handleEvents(jsonResponse.events);
-			} catch (HttpRequestException) {
+			} /* catch (HttpRequestException) {
 				Debug.WriteLine(String.Format("Error making request to {0}", startUrl));
 				throw;
 			} catch (JsonException) {
 				Debug.WriteLine("Error communicating with Omegle");
 				throw;
+			} */
+			catch (Exception ex) {
+				lock (instance.eventQueue) {
+					instance.eventQueue.Enqueue(new ErrorEvent(ex));
+					instance.eventInQueueSignal.Set();
+				}
 			}
 
 			while (true) {
-				instance.requestEvents();
+				try {
+					instance.requestEvents();
+				} catch (Exception ex) {
+					lock (instance.eventQueue) {
+						instance.eventQueue.Enqueue(new ErrorEvent(ex));
+						instance.eventInQueueSignal.Set();
+					}
+				}
 				if (disconnectEvent.WaitOne(0)) { //disconnectEvent is set
 					instance.disconnect();
 					isAlive = false;
@@ -244,12 +257,16 @@ namespace Omegle {
 
 		#region client -> server tasks
 		internal async Task<string> makeRequest(string requestUrl, Dictionary<string, string> passedContent) {
-			HttpResponseMessage result;
+			if (passedContent == null) {
+				throw new ArgumentNullException("Content dictionary cannot be null! Call makeRequest(string requestUrl) if you don't have any content");
+			}
+
+			HttpResponseMessage result = new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError);
 
 			Debug.WriteLine("Attempting request to {0}", String.Format(this.baseUrl, this.server) + requestUrl);
 			try {
 				//temporary headers
-			HttpContent content = new StringContent(urlEncode(passedContent), Encoding.UTF8, "application/x-www-form-urlencoded");
+				HttpContent content = new StringContent(urlEncode(passedContent), Encoding.UTF8, "application/x-www-form-urlencoded");
 				//content-length
 				content.Headers.TryAddWithoutValidation("Content-Length", urlEncode(passedContent).Length.ToString());
 				content.Headers.TryAddWithoutValidation("Host", this.server);
@@ -258,12 +275,13 @@ namespace Omegle {
 					String.Format(this.baseUrl, this.server) + requestUrl, content);
 				result = await resultTask;
 			} catch (Exception ex) {
-				if (ex is HttpRequestException) {
-					throw new HttpRequestException(requestUrl);
-				} else throw ex;
-				//lock (this.eventQueue) {
-				//	this.eventQueue.Enqueue(new ErrorEvent(ex));
-				//}
+				//if (ex is HttpRequestException) {
+				//	throw new HttpRequestException(requestUrl);
+				//} else throw ex;
+				lock (this.eventQueue) {
+					this.eventQueue.Enqueue(new ErrorEvent(ex));
+					this.eventInQueueSignal.Set();
+				}
 			}
 			Debug.WriteLine("Response: {0}", result.Content.ReadAsStringAsync().Result);
 				
@@ -276,10 +294,18 @@ namespace Omegle {
 		internal async void requestEvents() {
 			//JObject content = new JObject(new JProperty("id", this.clientId));
 			Dictionary<string, string> content = new Dictionary<string,string>{{"id", this.clientId}};
-			
+						
 			//parse request
-			string resp = await makeRequest(this.requestUrls["events"], content);
-			if (resp.Equals("null")) {
+			string resp = "null";
+			try {
+				resp = await makeRequest(this.requestUrls["events"], content);
+			} catch (Exception ex) {
+				lock (this.eventQueue) {
+					this.eventQueue.Enqueue(new ErrorEvent(ex));
+					this.eventInQueueSignal.Set();
+				}
+			}
+			if (resp.Equals("null")) { //omegle responded iwth "null"
 				return;
 			}
 			dynamic jsonResponse = Newtonsoft.Json.Linq.JArray.Parse(resp);
@@ -344,11 +370,7 @@ namespace Omegle {
 				thread.Run();
 			});
 
-			try {
-				runTask.Wait();
-			} catch (AggregateException ex) {
-				throw ex;
-			}
+			runTask.Wait();
 
 			this.eventThread = thread;
 
