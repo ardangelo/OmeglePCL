@@ -79,6 +79,8 @@ namespace Omegle {
 				}
 			}
 
+			instance.connected = true;
+
 			while (true) {
 				try {
 					instance.requestEvents();
@@ -105,7 +107,7 @@ namespace Omegle {
 
 	public class Client {
 		#region class fields
-		private Boolean connected;
+		internal Boolean connected;
 		private int eventDelay, rcs, firstevents;
 		private string spid, randomId, lang, server, clientId;
 		private String baseUrl;
@@ -218,6 +220,7 @@ namespace Omegle {
 				construct += prop.Key + "=" + Uri.EscapeDataString(prop.Value);
 				isFirst = false;
 			}
+
 			return construct;
 		}
 		#endregion
@@ -258,7 +261,7 @@ namespace Omegle {
 		#region client -> server tasks
 		internal async Task<string> makeRequest(string requestUrl, Dictionary<string, string> passedContent) {
 			if (passedContent == null) {
-				throw new ArgumentNullException("Content dictionary cannot be null! Call makeRequest(string requestUrl) if you don't have any content");
+				return await makeRequest(requestUrl);
 			}
 
 			HttpResponseMessage result = new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError);
@@ -317,7 +320,9 @@ namespace Omegle {
 		}
 
 		//can your programming language do this?
-		public async void disconnect() {
+		public async void disconnect() { //the nice way
+			this.eventThread.Stop();
+			
 			this.connected = false;
 			Dictionary<string, string> content = new Dictionary<string, string> { { "id", this.clientId } };
 
@@ -349,7 +354,9 @@ namespace Omegle {
 		public async void send(string message) {
 			Dictionary<string, string> content = new Dictionary<string, string> { { "msg", message }, { "id", this.clientId } };
 
-			await makeRequest(this.requestUrls["send"], content);
+			if ((await makeRequest(this.requestUrls["send"], content)).Equals("fail")) {
+				throw new InvalidOperationException("Server rejected message");
+			}
 		}
 
 		public async Task<JObject> status() {
@@ -377,7 +384,7 @@ namespace Omegle {
 			//return thread;
 		}
 
-		public void Stop() {
+		public void Stop() { //Stop terminates the thread, disconnect sends disconnect event and then calls Stop
 			this.eventThread.Stop();
 		}
 		#endregion
